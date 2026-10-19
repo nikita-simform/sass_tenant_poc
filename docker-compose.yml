@@ -1,0 +1,59 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: saas_tenant_poc
+    ports:
+      # Host-side port only, for connecting a local psql/GUI client directly
+      # to the containerized Postgres — the app container always talks to
+      # "db:5432" over Docker's internal network regardless of this mapping,
+      # so remapping the host side doesn't affect app<->db connectivity.
+      # Mapped to 5433 (not 5432) so this doesn't collide with a Postgres
+      # already running locally on the host, which is a common setup.
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    # No `env_file:` — a real deployment target has no .env file sitting on
+    # it at all (it's gitignored and never committed). The three secrets
+    # below are read via ${...} substitution instead: Compose resolves each
+    # one from whatever's already in the *process* environment it's invoked
+    # with — real deployments set these through their own mechanism (shell
+    # export, CI/CD secret injection, systemd Environment=, a cloud
+    # platform's secret-to-env mapping) — before running `docker compose up`.
+    # The `:?` form fails fast with a clear error if a secret isn't set,
+    # rather than silently starting with an empty JWT secret.
+    #
+    # Local dev needs zero extra steps: Compose separately auto-loads a file
+    # literally named `.env` next to this file, if one exists, purely to fill
+    # in ${...} substitutions like these — so `cp .env.example .env` still
+    # works exactly as before. That auto-load is a different mechanism from
+    # the removed `env_file:` key (which would have injected the whole file
+    # into the container directly); this only ever supplies values for the
+    # placeholders named explicitly below.
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/saas_tenant_poc?schema=public
+      TENANT_DATABASE_URL: postgresql://postgres:postgres@db:5432/saas_tenant_poc?schema=tenant_template
+      NODE_ENV: production
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in your environment (or a local .env for dev)}
+      SEED_PLATFORM_ADMIN_EMAIL: ${SEED_PLATFORM_ADMIN_EMAIL:?Set SEED_PLATFORM_ADMIN_EMAIL in your environment (or a local .env for dev)}
+      SEED_PLATFORM_ADMIN_PASSWORD: ${SEED_PLATFORM_ADMIN_PASSWORD:?Set SEED_PLATFORM_ADMIN_PASSWORD in your environment (or a local .env for dev)}
+    ports:
+      - "3000:3000"
+
+volumes:
+  pgdata:

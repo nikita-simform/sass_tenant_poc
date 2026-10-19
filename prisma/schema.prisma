@@ -1,0 +1,110 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Connection URL is supplied via prisma.config.ts (CLI) and via the driver
+// adapter passed to `new PrismaClient({ adapter })` at runtime (Prisma 7+ no
+// longer accepts `url` here — see src/lib/db/public.ts).
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  PLATFORM_ADMIN
+  ORG_ADMIN
+  ORG_MEMBER
+}
+
+enum InviteStatus {
+  ACCEPTED
+  REVOKED
+}
+
+model Plan {
+  id           String   @id @default(uuid())
+  name         String   @unique
+  maxUsers     Int
+  maxStorageMB Int
+  createdAt    DateTime @default(now())
+
+  organizations Organization[]
+}
+
+// Control-plane record for a tenant. `schemaName` points at the Postgres schema
+// holding this org's actual content (see TenantMigration + tenant-migrations/).
+// userCount/storageUsedMB are maintained via atomic conditional updates so seat
+// and storage limits can be enforced without a separate count-then-write race.
+model Organization {
+  id            String   @id @default(uuid())
+  name          String   @unique
+  schemaName    String   @unique
+  planId        String
+  userCount     Int      @default(0)
+  storageUsedMB Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  plan             Plan              @relation(fields: [planId], references: [id])
+  users            User[]
+  invites          Invite[]
+  auditLogs        AuditLog[]
+  tenantMigrations TenantMigration[]
+}
+
+// organizationId is null only for PLATFORM_ADMIN — a platform admin is not a
+// member of any tenant.
+model User {
+  id             String    @id @default(uuid())
+  email          String    @unique
+  passwordHash   String
+  role           UserRole
+  organizationId String?
+  createdAt      DateTime  @default(now())
+
+  organization Organization? @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId])
+}
+
+// Records that an org admin provisioned a user. No real email delivery in this
+// POC — "inviting" a user creates their account immediately (see README).
+model Invite {
+  id             String       @id @default(uuid())
+  organizationId String
+  email          String
+  role           UserRole
+  status         InviteStatus @default(ACCEPTED)
+  invitedByUserId String
+  createdAt      DateTime     @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId])
+}
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  organizationId String?
+  actorUserId    String?
+  action         String
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  organization Organization? @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId])
+  @@index([action])
+}
+
+// Tracks which tenant-migrations/*.sql files have been applied to which schema
+// (including "tenant_template" itself). See scripts/apply-tenant-migrations.ts.
+model TenantMigration {
+  id             String   @id @default(uuid())
+  organizationId String?
+  schemaName     String
+  migrationName  String
+  appliedAt      DateTime @default(now())
+
+  organization Organization? @relation(fields: [organizationId], references: [id])
+
+  @@unique([schemaName, migrationName])
+}

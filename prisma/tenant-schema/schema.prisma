@@ -1,0 +1,37 @@
+// A separate, minimal Prisma schema for TENANT-owned content only.
+//
+// Why this is its own schema.prisma rather than living in prisma/schema.prisma:
+// Prisma's multiSchema feature requires every schema name to be known statically
+// at authoring time (`@@schema("name")`), but our tenant schemas (org_<uuid>) are
+// created dynamically at signup — there's no fixed list to declare. Instead, this
+// file is generated ONCE into its own client, and at runtime we instantiate it many
+// times with the datasource URL overridden per tenant (see src/lib/db/tenant.ts) —
+// same generated model/query code, pointed at a different Postgres schema each time.
+//
+// `prisma migrate dev --schema=prisma/tenant-schema/schema.prisma` (run against
+// TENANT_DATABASE_URL, which points at the `tenant_template` schema) is how
+// structural changes to Resource are authored — see prisma/tenant-schema/migrations/.
+// scripts/apply-tenant-migrations.ts replays those same generated migration files
+// against every real org schema.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../src/generated/tenant-client"
+}
+
+// See prisma/schema.prisma for why `url` isn't set here (Prisma 7+).
+datasource db {
+  provider = "postgresql"
+}
+
+model Resource {
+  id              String   @id @default(uuid())
+  name            String
+  content         String?
+  sizeBytes       Int      @default(0)
+  createdByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([createdAt])
+}
